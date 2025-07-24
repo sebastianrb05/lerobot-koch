@@ -56,6 +56,7 @@ class KochLeader(Teleoperator):
             },
             calibration=self.calibration,
         )
+        self._last_action = None
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -166,8 +167,22 @@ class KochLeader(Teleoperator):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         start = time.perf_counter()
-        action = self.bus.sync_read("Present_Position")
-        action = {f"{motor}.pos": val for motor, val in action.items()}
+        try:
+            action = self.bus.sync_read("Present_Position", num_retry=3)
+            action = {f"{motor}.pos": val for motor, val in action.items()}
+            # Store last known good action
+            self._last_action = action
+        except ConnectionError as e:
+            logger.warning(f"Leader communication failed: {e}")
+            # Use last known position if available
+            if hasattr(self, '_last_action') and self._last_action:
+                action = self._last_action
+                logger.debug("Using last known leader position")
+            else:
+                # If no previous action, return zero position
+                action = {f"{motor}.pos": 0.0 for motor in self.bus.motors}
+                logger.warning("No previous action available, using zero position")
+        
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
         return action
